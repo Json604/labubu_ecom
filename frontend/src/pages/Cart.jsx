@@ -1,12 +1,15 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getCart, clearCart, createOrder, createPayment, testWebhook, USER_ID } from '../api/api'
+import { getCart, clearCart, createOrder, createPayment, testWebhook } from '../api/api'
+import Loading from '../components/Loading'
+import EmptyState from '../components/EmptyState'
+import Toast from '../components/Toast'
 
 function Cart({ onCartUpdate }) {
   const [cartItems, setCartItems] = useState([])
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
   const [processing, setProcessing] = useState(false)
+  const [toast, setToast] = useState(null)
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -16,33 +19,37 @@ function Cart({ onCartUpdate }) {
   const loadCart = async () => {
     try {
       setLoading(true)
-      const response = await getCart(USER_ID)
+      const response = await getCart()
       setCartItems(response.data)
     } catch (err) {
-      setError('Failed to load cart')
+      showToast('Failed to load cart', 'error')
       console.error(err)
     } finally {
       setLoading(false)
     }
   }
 
+  const showToast = (message, type = 'success') => {
+    setToast({ message, type })
+  }
+
   const handleClearCart = async () => {
     try {
-      await clearCart(USER_ID)
+      await clearCart()
       setCartItems([])
+      showToast('Cart cleared')
       if (onCartUpdate) onCartUpdate()
     } catch (err) {
-      setError('Failed to clear cart')
+      showToast('Failed to clear cart', 'error')
     }
   }
 
   const handlePayNow = async () => {
     try {
       setProcessing(true)
-      setError(null)
       
       // Step 1: Create order from cart
-      const orderResponse = await createOrder(USER_ID)
+      const orderResponse = await createOrder()
       const order = orderResponse.data
       if (onCartUpdate) onCartUpdate()
       
@@ -86,7 +93,6 @@ function Cart({ onCartUpdate }) {
         modal: {
           ondismiss: function() {
             setProcessing(false)
-            // Order created but payment cancelled - redirect to order page
             navigate(`/order/${order.id}`)
           }
         }
@@ -94,14 +100,14 @@ function Cart({ onCartUpdate }) {
       
       const razorpay = new window.Razorpay(options)
       razorpay.on('payment.failed', function (response) {
-        setError('Payment failed: ' + response.error.description)
+        showToast('Payment failed: ' + response.error.description, 'error')
         setProcessing(false)
         navigate(`/order/${order.id}`)
       })
       razorpay.open()
       
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to process payment')
+      showToast(err.response?.data?.error || err.response?.data?.message || 'Failed to process payment', 'error')
       setProcessing(false)
     }
   }
@@ -113,31 +119,38 @@ function Cart({ onCartUpdate }) {
     }, 0)
   }
 
+  const itemCount = cartItems.reduce((sum, item) => sum + item.quantity, 0)
+
   if (loading) {
-    return <div className="loading">Loading cart...</div>
+    return <Loading text="Loading cart" />
   }
 
   return (
     <div>
-      <h2 className="page-title">Your Cart</h2>
-      
-      {error && <div className="error">{error}</div>}
+      <div className="page-header">
+        <div>
+          <h2 className="page-title">Your Cart</h2>
+          <p className="page-subtitle">{itemCount} {itemCount === 1 ? 'item' : 'items'} in your cart</p>
+        </div>
+      </div>
 
       {cartItems.length === 0 ? (
-        <div className="empty-state">
-          <h3>Cart is Empty</h3>
-          <p>Add some LABUBU to your collection</p>
-          <button className="btn" onClick={() => navigate('/')} style={{ width: 'auto', marginTop: '20px' }}>
-            Browse Products
-          </button>
-        </div>
+        <EmptyState
+          icon="🛒"
+          title="Cart is Empty"
+          message="Add some LABUBU to your collection"
+          actionText="Browse Products"
+          onAction={() => navigate('/')}
+        />
       ) : (
         <>
           {cartItems.map(item => (
             <div key={item.id} className="cart-item">
               <div className="cart-item-info">
                 <h3>{item.product?.name || 'Unknown Product'}</h3>
-                <p>Qty: {item.quantity} × ₹{item.product?.price?.toLocaleString()}</p>
+                <p className="cart-item-details">
+                  Qty: {item.quantity} × ₹{item.product?.price?.toLocaleString()}
+                </p>
               </div>
               <div className="cart-item-price">
                 ₹{((item.product?.price || 0) * item.quantity).toLocaleString()}
@@ -145,9 +158,19 @@ function Cart({ onCartUpdate }) {
             </div>
           ))}
 
-          <div className="cart-total">
-            <h3>Total</h3>
-            <div className="cart-total-amount">₹{calculateTotal().toLocaleString()}</div>
+          <div className="cart-summary">
+            <div className="cart-summary-row">
+              <span className="cart-summary-label">Subtotal</span>
+              <span className="cart-summary-value">₹{calculateTotal().toLocaleString()}</span>
+            </div>
+            <div className="cart-summary-row">
+              <span className="cart-summary-label">Shipping</span>
+              <span className="cart-summary-value">FREE</span>
+            </div>
+            <div className="cart-summary-row">
+              <span className="cart-summary-label">Total</span>
+              <span className="cart-total-value">₹{calculateTotal().toLocaleString()}</span>
+            </div>
           </div>
 
           <div className="cart-actions">
@@ -155,7 +178,7 @@ function Cart({ onCartUpdate }) {
               Clear Cart
             </button>
             <button 
-              className="btn" 
+              className="btn btn-lg" 
               onClick={handlePayNow}
               disabled={processing}
             >
@@ -163,6 +186,14 @@ function Cart({ onCartUpdate }) {
             </button>
           </div>
         </>
+      )}
+
+      {toast && (
+        <Toast 
+          message={toast.message} 
+          type={toast.type} 
+          onClose={() => setToast(null)} 
+        />
       )}
     </div>
   )

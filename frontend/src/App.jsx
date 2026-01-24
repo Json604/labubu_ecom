@@ -1,22 +1,30 @@
 import { useState, useEffect } from 'react'
-import { Routes, Route, NavLink, useNavigate } from 'react-router-dom'
+import { Routes, Route, useNavigate, Navigate } from 'react-router-dom'
+import Layout from './components/Layout'
 import Products from './pages/Products'
 import Cart from './pages/Cart'
 import Order from './pages/Order'
 import PaymentResult from './pages/PaymentResult'
-import { getCart, getUserOrders, USER_ID } from './api/api'
+import Login from './pages/Login'
+import Register from './pages/Register'
+import Loading from './components/Loading'
+import EmptyState from './components/EmptyState'
+import { getCart, getOrders, isLoggedIn, getUser, logout } from './api/api'
 
 function App() {
   const [cartCount, setCartCount] = useState(0)
+  const [user, setUser] = useState(getUser())
   const navigate = useNavigate()
 
   useEffect(() => {
-    loadCartCount()
-  }, [])
+    if (isLoggedIn()) {
+      loadCartCount()
+    }
+  }, [user])
 
   const loadCartCount = async () => {
     try {
-      const response = await getCart(USER_ID)
+      const response = await getCart()
       const count = response.data.reduce((sum, item) => sum + item.quantity, 0)
       setCartCount(count)
     } catch (err) {
@@ -24,37 +32,39 @@ function App() {
     }
   }
 
-  return (
-    <div className="container">
-      <header className="header">
-        <h1 onClick={() => navigate('/')} style={{ cursor: 'pointer' }}>
-          LABUBU STORE
-        </h1>
-        <p className="header-subtitle">Collectible toys for serious collectors</p>
-        
-        <nav className="nav">
-          <NavLink to="/" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-            Products
-          </NavLink>
-          <NavLink to="/cart" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-            Cart {cartCount > 0 && `(${cartCount})`}
-          </NavLink>
-          <NavLink to="/orders" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
-            Orders
-          </NavLink>
-        </nav>
-      </header>
+  const handleLogin = () => {
+    setUser(getUser())
+  }
 
-      <main>
-        <Routes>
-          <Route path="/" element={<Products onCartUpdate={loadCartCount} />} />
-          <Route path="/cart" element={<Cart onCartUpdate={loadCartCount} />} />
-          <Route path="/orders" element={<OrdersList />} />
-          <Route path="/order/:orderId" element={<Order />} />
-          <Route path="/payment/:orderId" element={<PaymentResult />} />
-        </Routes>
-      </main>
-    </div>
+  const handleLogout = () => {
+    logout()
+    setUser(null)
+    setCartCount(0)
+    navigate('/')
+  }
+
+  return (
+    <Layout cartCount={cartCount} onLogout={handleLogout}>
+      <Routes>
+        <Route path="/" element={<Products onCartUpdate={loadCartCount} />} />
+        <Route path="/login" element={<Login onLogin={handleLogin} />} />
+        <Route path="/register" element={<Register onLogin={handleLogin} />} />
+        
+        {/* Protected routes */}
+        <Route path="/cart" element={
+          isLoggedIn() ? <Cart onCartUpdate={loadCartCount} /> : <Navigate to="/login" />
+        } />
+        <Route path="/orders" element={
+          isLoggedIn() ? <OrdersList /> : <Navigate to="/login" />
+        } />
+        <Route path="/order/:orderId" element={
+          isLoggedIn() ? <Order /> : <Navigate to="/login" />
+        } />
+        <Route path="/payment/:orderId" element={
+          isLoggedIn() ? <PaymentResult /> : <Navigate to="/login" />
+        } />
+      </Routes>
+    </Layout>
   )
 }
 
@@ -69,8 +79,8 @@ function OrdersList() {
 
   const loadOrders = async () => {
     try {
-      const response = await getUserOrders(USER_ID)
-      setOrders(response.data)
+      const response = await getOrders()
+      setOrders(response.data.content || [])
     } catch (err) {
       console.error('Failed to load orders')
     } finally {
@@ -87,21 +97,26 @@ function OrdersList() {
   }
 
   if (loading) {
-    return <div className="loading">Loading orders...</div>
+    return <Loading text="Loading orders" />
   }
 
   return (
     <div>
-      <h2 className="page-title">Your Orders</h2>
+      <div className="page-header">
+        <div>
+          <h2 className="page-title">Your Orders</h2>
+          <p className="page-subtitle">Track your LABUBU collection journey</p>
+        </div>
+      </div>
       
       {orders.length === 0 ? (
-        <div className="empty-state">
-          <h3>No Orders Yet</h3>
-          <p>Start shopping to see your orders here</p>
-          <button className="btn" onClick={() => navigate('/')} style={{ width: 'auto', marginTop: '20px' }}>
-            Browse Products
-          </button>
-        </div>
+        <EmptyState
+          icon="📦"
+          title="No Orders Yet"
+          message="Start shopping to see your orders here"
+          actionText="Browse Products"
+          onAction={() => navigate('/')}
+        />
       ) : (
         <div className="orders-list">
           {orders.map(order => (
@@ -110,14 +125,18 @@ function OrdersList() {
               className="order-list-item"
               onClick={() => navigate(`/order/${order.id}`)}
             >
-              <div>
-                <strong style={{ fontSize: '0.85rem' }}>{order.id}</strong>
-                <p style={{ color: '#666', fontSize: '0.85rem', marginTop: '5px' }}>
-                  {new Date(order.createdAt).toLocaleDateString()}
+              <div className="order-list-info">
+                <h4>{order.id}</h4>
+                <p className="order-list-date">
+                  {new Date(order.createdAt).toLocaleDateString('en-IN', {
+                    day: 'numeric',
+                    month: 'short',
+                    year: 'numeric'
+                  })}
                 </p>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
-                <span style={{ fontWeight: '700', fontSize: '1.1rem' }}>
+              <div className="order-list-right">
+                <span className="order-list-amount">
                   ₹{order.totalAmount?.toLocaleString()}
                 </span>
                 <span className={`order-status ${getStatusClass(order.status)}`}>

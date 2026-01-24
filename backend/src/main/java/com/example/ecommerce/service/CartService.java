@@ -1,6 +1,8 @@
 package com.example.ecommerce.service;
 
 import com.example.ecommerce.dto.AddToCartRequest;
+import com.example.ecommerce.exception.BadRequestException;
+import com.example.ecommerce.exception.ResourceNotFoundException;
 import com.example.ecommerce.model.CartItem;
 import com.example.ecommerce.model.Product;
 import com.example.ecommerce.repository.CartRepository;
@@ -18,43 +20,32 @@ public class CartService {
     @Autowired
     private ProductService productService;
     
-    public CartItem addToCart(AddToCartRequest request) {
+    public CartItem addToCart(String userId, AddToCartRequest request) {
         // Check if product exists
-        Optional<Product> productOpt = productService.getProductById(request.getProductId());
-        if (productOpt.isEmpty()) {
-            throw new RuntimeException("Product not found: " + request.getProductId());
-        }
-        
-        Product product = productOpt.get();
+        Product product = productService.getProductById(request.getProductId())
+                .orElseThrow(() -> new ResourceNotFoundException("Product", request.getProductId()));
         
         // Check if product has enough stock
         if (product.getStock() < request.getQuantity()) {
-            throw new RuntimeException("Insufficient stock. Available: " + product.getStock());
+            throw new BadRequestException("Insufficient stock. Available: " + product.getStock());
         }
         
         // Check if item already in cart
         Optional<CartItem> existingItem = cartRepository.findByUserIdAndProductId(
-            request.getUserId(), request.getProductId());
+            userId, request.getProductId());
         
         if (existingItem.isPresent()) {
-            // Update quantity
             CartItem cartItem = existingItem.get();
             int newQuantity = cartItem.getQuantity() + request.getQuantity();
             
-            // Check stock for new quantity
             if (product.getStock() < newQuantity) {
-                throw new RuntimeException("Insufficient stock. Available: " + product.getStock());
+                throw new BadRequestException("Insufficient stock. Available: " + product.getStock());
             }
             
             cartItem.setQuantity(newQuantity);
             return cartRepository.save(cartItem);
         } else {
-            // Add new item
-            CartItem cartItem = new CartItem(
-                request.getUserId(),
-                request.getProductId(),
-                request.getQuantity()
-            );
+            CartItem cartItem = new CartItem(userId, request.getProductId(), request.getQuantity());
             return cartRepository.save(cartItem);
         }
     }
@@ -69,17 +60,14 @@ public class CartService {
             cartItemWithProduct.put("productId", item.getProductId());
             cartItemWithProduct.put("quantity", item.getQuantity());
             
-            // Get product details
-            Optional<Product> productOpt = productService.getProductById(item.getProductId());
-            if (productOpt.isPresent()) {
-                Product product = productOpt.get();
+            productService.getProductById(item.getProductId()).ifPresent(product -> {
                 Map<String, Object> productInfo = new HashMap<>();
                 productInfo.put("id", product.getId());
                 productInfo.put("name", product.getName());
                 productInfo.put("price", product.getPrice());
                 productInfo.put("edition", product.getEdition());
                 cartItemWithProduct.put("product", productInfo);
-            }
+            });
             
             result.add(cartItemWithProduct);
         }

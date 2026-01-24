@@ -1,12 +1,16 @@
 import { useState, useEffect } from 'react'
-import { getProducts, addToCart, USER_ID } from '../api/api'
+import { useNavigate } from 'react-router-dom'
+import { getProducts, addToCart, isLoggedIn } from '../api/api'
 import ProductCard from '../components/ProductCard'
+import Loading from '../components/Loading'
+import EmptyState from '../components/EmptyState'
+import Toast from '../components/Toast'
 
 function Products({ onCartUpdate }) {
   const [products, setProducts] = useState([])
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
-  const [message, setMessage] = useState(null)
+  const [toast, setToast] = useState(null)
+  const navigate = useNavigate()
 
   useEffect(() => {
     loadProducts()
@@ -16,53 +20,53 @@ function Products({ onCartUpdate }) {
     try {
       setLoading(true)
       const response = await getProducts()
-      setProducts(response.data)
+      setProducts(response.data.content || [])
     } catch (err) {
-      setError('Failed to load products')
+      showToast('Failed to load products', 'error')
       console.error(err)
     } finally {
       setLoading(false)
     }
   }
 
+  const showToast = (message, type = 'success') => {
+    setToast({ message, type })
+  }
+
   const handleAddToCart = async (productId, quantity) => {
+    if (!isLoggedIn()) {
+      navigate('/login')
+      return
+    }
+    
     try {
-      await addToCart(USER_ID, productId, quantity)
-      setMessage('Added to cart!')
-      setTimeout(() => setMessage(null), 2000)
+      await addToCart(productId, quantity)
+      showToast('Added to cart!')
       if (onCartUpdate) onCartUpdate()
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to add to cart')
-      setTimeout(() => setError(null), 3000)
+      showToast(err.response?.data?.error || err.response?.data?.message || 'Failed to add to cart', 'error')
     }
   }
 
   if (loading) {
-    return <div className="loading">Loading products...</div>
+    return <Loading text="Loading products" />
   }
 
   return (
     <div>
-      <h2 className="page-title">LABUBU Collection</h2>
-      
-      {error && <div className="error">{error}</div>}
-      {message && (
-        <div style={{ 
-          background: '#e8ffe8', 
-          border: '4px solid #0a0', 
-          padding: '15px', 
-          marginBottom: '20px',
-          fontWeight: '700'
-        }}>
-          {message}
+      <div className="page-header">
+        <div>
+          <h2 className="page-title">LABUBU Collection</h2>
+          <p className="page-subtitle">Discover rare and exclusive collectibles</p>
         </div>
-      )}
+      </div>
 
       {products.length === 0 ? (
-        <div className="empty-state">
-          <h3>No Products Yet</h3>
-          <p>Check back later for LABUBU drops</p>
-        </div>
+        <EmptyState
+          icon="🧸"
+          title="No Products Yet"
+          message="Check back later for LABUBU drops"
+        />
       ) : (
         <div className="product-grid">
           {products.map(product => (
@@ -73,6 +77,14 @@ function Products({ onCartUpdate }) {
             />
           ))}
         </div>
+      )}
+
+      {toast && (
+        <Toast 
+          message={toast.message} 
+          type={toast.type} 
+          onClose={() => setToast(null)} 
+        />
       )}
     </div>
   )

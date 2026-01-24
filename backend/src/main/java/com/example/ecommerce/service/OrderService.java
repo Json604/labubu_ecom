@@ -1,9 +1,14 @@
 package com.example.ecommerce.service;
 
+import com.example.ecommerce.exception.BadRequestException;
+import com.example.ecommerce.exception.ResourceNotFoundException;
 import com.example.ecommerce.model.*;
 import com.example.ecommerce.repository.OrderRepository;
 import com.example.ecommerce.repository.PaymentRepository;
+import com.example.ecommerce.util.EmailUtil;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
@@ -29,29 +34,25 @@ public class OrderService {
     @Autowired
     private MongoTemplate mongoTemplate;
     
+    @Autowired
+    private EmailUtil emailUtil;
+    
     public Map<String, Object> createOrder(String userId) {
-        // Get cart items
         List<CartItem> cartItems = cartService.getCartItemsByUserId(userId);
         
         if (cartItems.isEmpty()) {
-            throw new RuntimeException("Cart is empty");
+            throw new BadRequestException("Cart is empty");
         }
         
-        // Calculate total and validate stock
         double totalAmount = 0;
         List<Map<String, Object>> orderItemsData = new ArrayList<>();
         
         for (CartItem cartItem : cartItems) {
-            Optional<Product> productOpt = productService.getProductById(cartItem.getProductId());
-            if (productOpt.isEmpty()) {
-                throw new RuntimeException("Product not found: " + cartItem.getProductId());
-            }
+            Product product = productService.getProductById(cartItem.getProductId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Product", cartItem.getProductId()));
             
-            Product product = productOpt.get();
-            
-            // Check stock
             if (product.getStock() < cartItem.getQuantity()) {
-                throw new RuntimeException("Insufficient stock for product: " + product.getName());
+                throw new BadRequestException("Insufficient stock for product: " + product.getName());
             }
             
             double itemTotal = product.getPrice() * cartItem.getQuantity();
@@ -64,11 +65,9 @@ public class OrderService {
             orderItemsData.add(itemData);
         }
         
-        // Create order
         Order order = new Order(userId, totalAmount);
         order = orderRepository.save(order);
         
-        // Create order items and update stock
         List<OrderItem> savedOrderItems = new ArrayList<>();
         for (Map<String, Object> itemData : orderItemsData) {
             OrderItem orderItem = new OrderItem(
@@ -79,17 +78,14 @@ public class OrderService {
             );
             savedOrderItems.add(mongoTemplate.save(orderItem));
             
-            // Reduce stock
             productService.updateStock(
                 (String) itemData.get("productId"),
                 -((Integer) itemData.get("quantity"))
             );
         }
         
-        // Clear cart
         cartService.clearCart(userId);
         
-        // Build response
         Map<String, Object> response = new HashMap<>();
         response.put("id", order.getId());
         response.put("userId", order.getUserId());
@@ -111,21 +107,14 @@ public class OrderService {
     }
     
     public Map<String, Object> getOrderById(String orderId) {
-        Optional<Order> orderOpt = orderRepository.findById(orderId);
-        if (orderOpt.isEmpty()) {
-            throw new RuntimeException("Order not found: " + orderId);
-        }
+        Order order = orderRepository.findById(orderId)
+                .orElseThrow(() -> new ResourceNotFoundException("Order", orderId));
         
-        Order order = orderOpt.get();
-        
-        // Get order items
         Query query = new Query(Criteria.where("orderId").is(orderId));
         List<OrderItem> orderItems = mongoTemplate.find(query, OrderItem.class);
         
-        // Get payment if exists
         Optional<Payment> paymentOpt = paymentRepository.findByOrderId(orderId);
         
-        // Build response
         Map<String, Object> response = new HashMap<>();
         response.put("id", order.getId());
         response.put("userId", order.getUserId());
@@ -143,49 +132,30 @@ public class OrderService {
         }
         response.put("items", items);
         
-        if (paymentOpt.isPresent()) {
-            Payment payment = paymentOpt.get();
+        paymentOpt.ifPresent(payment -> {
             Map<String, Object> paymentMap = new HashMap<>();
             paymentMap.put("id", payment.getId());
             paymentMap.put("status", payment.getStatus().toString());
             paymentMap.put("amount", payment.getAmount());
             paymentMap.put("razorpayOrderId", payment.getRazorpayOrderId());
             response.put("payment", paymentMap);
-        }
+        });
         
         return response;
     }
     
-    public List<Map<String, Object>> getOrdersByUserId(String userId) {
-        List<Order> orders = orderRepository.findByUserId(userId);
-        List<Map<String, Object>> result = new ArrayList<>();
-        
-        for (Order order : orders) {
-            Map<String, Object> orderMap = new HashMap<>();
-            orderMap.put("id", order.getId());
-            orderMap.put("totalAmount", order.getTotalAmount());
-            orderMap.put("status", order.getStatus().toString());
-            orderMap.put("createdAt", order.getCreatedAt().toString());
-            result.add(orderMap);
-        }
-        
-        return result;
+    public Page<Order> getOrdersByUserId(String userId, Pageable pageable) {
+        return orderRepository.findByUserId(userId, pageable);
     }
     
     public Map<String, Object> cancelOrder(String orderId) {
-        Optional<Order> orderOpt = orderRepository.findById(orderId);
-        if (orderOpt.isEmpty()) {
-            throw new RuntimeException("Order not found: " + orderId);
-        }
+        Order order = orderRepository.findById(orderId)
+                .orElseThrow(() -> new ResourceNotFoundException("Order", orderId));
         
-        Order order = orderOpt.get();
-        
-        // Can't cancel already cancelled orders
         if (order.getStatus() == OrderStatus.CANCELLED) {
-            throw new RuntimeException("Order is already cancelled");
+            throw new BadRequestException("Order is already cancelled");
         }
         
-        // Restore stock
         Query query = new Query(Criteria.where("orderId").is(orderId));
         List<OrderItem> orderItems = mongoTemplate.find(query, OrderItem.class);
         
@@ -193,13 +163,11 @@ public class OrderService {
             productService.updateStock(item.getProductId(), item.getQuantity());
         }
         
-        // Build response message based on previous status
         String message = "Order cancelled successfully. Stock restored.";
         if (order.getStatus() == OrderStatus.PAID) {
             message = "Order cancelled. Stock restored. Refund will be processed separately.";
         }
         
-        // Update order status
         order.setStatus(OrderStatus.CANCELLED);
         orderRepository.save(order);
         
@@ -212,12 +180,16 @@ public class OrderService {
     }
     
     public void updateOrderStatus(String orderId, OrderStatus status) {
-        Optional<Order> orderOpt = orderRepository.findById(orderId);
-        if (orderOpt.isPresent()) {
-            Order order = orderOpt.get();
+        orderRepository.findById(orderId).ifPresent(order -> {
             order.setStatus(status);
             orderRepository.save(order);
-        }
+        });
+    }
+    
+    public void sendOrderConfirmationEmail(String orderId, String userEmail) {
+        orderRepository.findById(orderId).ifPresent(order -> {
+            emailUtil.sendOrderConfirmation(userEmail, orderId, order.getTotalAmount());
+        });
     }
     
     public Optional<Order> findById(String orderId) {
